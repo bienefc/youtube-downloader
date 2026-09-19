@@ -29,6 +29,8 @@ const downloadBtn = document.getElementById("download-btn");
 const qualitySelect = document.getElementById("quality-select");
 const errorMsg = document.getElementById("error-msg");
 const statusMsg = document.getElementById("status-msg");
+const progressWrap = document.getElementById("progress-wrap");
+const progressFill = document.getElementById("progress-fill");
 const videoCard = document.getElementById("video-card");
 const videoThumb = document.getElementById("video-thumb");
 const videoTitle = document.getElementById("video-title");
@@ -88,31 +90,86 @@ async function fetchInfo() {
   }
 }
 
+function setProgress(percent, indeterminate) {
+  progressWrap.hidden = false;
+  progressFill.classList.toggle("indeterminate", indeterminate);
+  progressFill.style.width = indeterminate ? "" : `${percent}%`;
+}
+
+function hideProgress() {
+  progressWrap.hidden = true;
+  progressFill.classList.remove("indeterminate");
+  progressFill.style.width = "0%";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollProgress(jobId) {
+  while (true) {
+    const res = await fetch(`/api/progress/${jobId}`);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || "Lost track of the download.");
+    }
+
+    if (data.status === "error") {
+      throw new Error(data.error || "Download failed.");
+    }
+
+    if (data.status === "processing") {
+      statusMsg.textContent = "Merging audio and video...";
+      setProgress(0, true);
+    } else if (data.status === "finished") {
+      statusMsg.textContent = "Finishing up...";
+      setProgress(100, false);
+      return;
+    } else if (data.percent != null) {
+      statusMsg.textContent = `Downloading... ${data.percent}%`;
+      setProgress(data.percent, false);
+    } else {
+      statusMsg.textContent = "Downloading...";
+      setProgress(0, true);
+    }
+
+    await sleep(600);
+  }
+}
+
 async function downloadVideo() {
   const url = urlInput.value.trim();
   const quality = qualitySelect.value;
   clearError();
   downloadBtn.disabled = true;
   statusMsg.hidden = false;
-  statusMsg.textContent = "Downloading... this can take a while for large videos.";
+  statusMsg.textContent = "Starting download...";
+  setProgress(0, true);
 
   try {
-    const res = await fetch("/api/download", {
+    const startRes = await fetch("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, quality }),
     });
+    const startData = await startRes.json();
+    if (!startRes.ok) {
+      throw new Error(startData.detail || "Download failed to start.");
+    }
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
+    await pollProgress(startData.job_id);
+
+    const fileRes = await fetch(`/api/file/${startData.job_id}`);
+    if (!fileRes.ok) {
+      const data = await fileRes.json().catch(() => ({}));
       throw new Error(data.detail || "Download failed.");
     }
 
-    const disposition = res.headers.get("Content-Disposition") || "";
+    const disposition = fileRes.headers.get("Content-Disposition") || "";
     const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/);
     const filename = match ? decodeURIComponent(match[1]) : "video";
 
-    const blob = await res.blob();
+    const blob = await fileRes.blob();
     const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = objectUrl;
@@ -126,6 +183,7 @@ async function downloadVideo() {
   } catch (err) {
     showError(err.message);
     statusMsg.hidden = true;
+    hideProgress();
   } finally {
     downloadBtn.disabled = false;
   }

@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -26,6 +27,10 @@ FORMAT_PRESETS = {
 }
 
 
+JOBS: dict = {}
+JOBS_LOCK = threading.Lock()
+
+
 class InfoRequest(BaseModel):
     url: str
 
@@ -35,8 +40,61 @@ class DownloadRequest(BaseModel):
     quality: str = "best"
 
 
-def _cleanup_task(path: Path) -> BackgroundTask:
-    return BackgroundTask(shutil.rmtree, path, ignore_errors=True)
+def _run_download(job_id: str, url: str, quality: str, job_dir: Path):
+    def progress_hook(d):
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            downloaded = d.get("downloaded_bytes", 0)
+            percent = round(downloaded / total * 100, 1) if total else None
+            with JOBS_LOCK:
+                JOBS[job_id]["status"] = "downloading"
+                JOBS[job_id]["percent"] = percent
+        elif d["status"] == "finished":
+            with JOBS_LOCK:
+                JOBS[job_id]["percent"] = 100.0
+
+    def postprocessor_hook(d):
+        if d["status"] == "started":
+            with JOBS_LOCK:
+                JOBS[job_id]["status"] = "processing"
+                JOBS[job_id]["percent"] = None
+
+    is_audio = quality == "audio"
+    ydl_opts = {
+        "quiet": True,
+        "format": FORMAT_PRESETS[quality],
+        "outtmpl": str(job_dir / "%(title)s.%(ext)s"),
+        "progress_hooks": [progress_hook],
+        "postprocessor_hooks": [postprocessor_hook],
+    }
+    if is_audio:
+        ydl_opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
+        ]
+    else:
+        ydl_opts["merge_output_format"] = "mp4"
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(url, download=True)
+    except Exception as e:
+        with JOBS_LOCK:
+            JOBS[job_id]["status"] = "error"
+            JOBS[job_id]["error"] = str(e)
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return
+
+    files = list(job_dir.iterdir())
+    with JOBS_LOCK:
+        if not files:
+            JOBS[job_id]["status"] = "error"
+            JOBS[job_id]["error"] = "Download produced no file"
+        else:
+            JOBS[job_id]["status"] = "finished"
+            JOBS[job_id]["percent"] = 100.0
+            JOBS[job_id]["filename"] = files[0].name
+    if not files:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.post("/api/info")
@@ -57,44 +115,68 @@ def get_info(payload: InfoRequest):
 
 
 @app.post("/api/download")
-def download(payload: DownloadRequest):
+def start_download(payload: DownloadRequest):
     if payload.quality not in FORMAT_PRESETS:
         raise HTTPException(status_code=400, detail="Invalid quality preset")
 
-    job_dir = DOWNLOAD_DIR / uuid.uuid4().hex
+    job_id = uuid.uuid4().hex
+    job_dir = DOWNLOAD_DIR / job_id
     job_dir.mkdir()
 
-    is_audio = payload.quality == "audio"
-    ydl_opts = {
-        "quiet": True,
-        "format": FORMAT_PRESETS[payload.quality],
-        "outtmpl": str(job_dir / "%(title)s.%(ext)s"),
-    }
-    if is_audio:
-        ydl_opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
-        ]
-    else:
-        ydl_opts["merge_output_format"] = "mp4"
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "status": "downloading",
+            "percent": 0.0,
+            "filename": None,
+            "error": None,
+            "dir": str(job_dir),
+        }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(payload.url, download=True)
-    except yt_dlp.utils.DownloadError as e:
+    threading.Thread(
+        target=_run_download,
+        args=(job_id, payload.url, payload.quality, job_dir),
+        daemon=True,
+    ).start()
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/progress/{job_id}")
+def get_progress(job_id: str):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "status": job["status"],
+            "percent": job["percent"],
+            "error": job["error"],
+        }
+
+
+@app.get("/api/file/{job_id}")
+def get_file(job_id: str):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job or job["status"] != "finished":
+            raise HTTPException(status_code=404, detail="File not ready")
+        job_dir = Path(job["dir"])
+        filename = job["filename"]
+
+    result_file = job_dir / filename
+    if not result_file.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    def cleanup():
         shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=str(e))
+        with JOBS_LOCK:
+            JOBS.pop(job_id, None)
 
-    files = list(job_dir.iterdir())
-    if not files:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="Download produced no file")
-
-    result_file = files[0]
     return FileResponse(
         path=result_file,
-        filename=result_file.name,
+        filename=filename,
         media_type="application/octet-stream",
-        background=_cleanup_task(job_dir),
+        background=BackgroundTask(cleanup),
     )
 
 
