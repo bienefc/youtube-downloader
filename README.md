@@ -42,13 +42,7 @@ cd youtube-downloader
 docker compose up -d --build
 ```
 
-The app is now listening on port 8000. Open the firewall if needed:
-
-```bash
-sudo ufw allow 8000/tcp
-```
-
-Visit `http://<your-vps-ip>:8000`.
+The container binds to `127.0.0.1:8000` only — it's not reachable from outside the box directly. Put it behind Nginx (see `deploy/nginx.conf.example`) so it's served through your existing reverse proxy, the same way other apps on the server are set up.
 
 To update after pulling new commits:
 
@@ -58,8 +52,6 @@ docker compose up -d --build
 ```
 
 Logs: `docker compose logs -f`. Stop: `docker compose down`.
-
-No domain/TLS is set up — this serves plain HTTP on the raw port. Put Nginx + Let's Encrypt in front later if you point a domain at it.
 
 ## Notes
 
