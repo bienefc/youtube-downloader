@@ -1,8 +1,12 @@
 FROM python:3.12-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# yt-dlp needs a JS runtime to solve YouTube's challenges; Deno is its default.
+ENV DENO_INSTALL=/usr/local
+RUN curl -fsSL https://deno.land/install.sh | sh -s -- -y
 
 WORKDIR /app
 
