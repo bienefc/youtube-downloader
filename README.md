@@ -38,6 +38,10 @@ sudo usermod -aG docker $USER   # log out/in (or `newgrp docker`) after this
 git clone https://github.com/bienefc/youtube-downloader.git
 cd youtube-downloader
 
+# docker-compose.yml expects this file to exist (see "YouTube blocking the server" below);
+# an empty file is fine if you don't need cookies yet
+touch backend/cookies.txt
+
 # build and run in the background, restarts on reboot/crash
 docker compose up -d --build
 ```
@@ -60,6 +64,28 @@ docker compose up -d --build
 ```
 
 Logs: `docker compose logs -f`. Stop: `docker compose down`.
+
+## YouTube blocking the server ("Sign in to confirm you're not a bot")
+
+YouTube challenges requests from datacenter/VPS IPs far more aggressively than home IPs. Two independent fixes are wired in — use either or both:
+
+### PO token provider (automatic, no account needed)
+
+`docker-compose.yml` runs a second container, [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider), which generates YouTube's "Proof of Origin" tokens for yt-dlp automatically. It requires no login and no per-user setup — `docker compose up -d --build` starts it alongside the app and yt-dlp picks it up via the `BGUTIL_POT_BASE_URL` environment variable already set in the compose file. Adds ~300-500MB RAM for the sidecar container; check `free -h` on the server has room before relying on it at scale.
+
+### Cookies (manual fallback)
+
+If PO tokens alone aren't enough for a given video, you can additionally feed yt-dlp cookies from a real, logged-in browser session:
+
+1. Install a cookie-export extension (e.g. "Get cookies.txt LOCALLY") in a browser where you're logged into YouTube.
+2. Export cookies for `youtube.com` to a Netscape-format `cookies.txt`.
+3. Copy it to the server **directly via `scp`** — never paste the file's contents anywhere else (chat, email, etc.): `scp cookies.txt user@vps:~/apps/youtube-downloader/backend/cookies.txt`.
+4. Lock down its permissions so only your user can read it: `chmod 600 backend/cookies.txt`.
+5. `docker compose up -d --build` to pick it up.
+
+The backend automatically uses `backend/cookies.txt` if present and non-empty, and ignores it otherwise. **Never commit this file** — it's already in `.gitignore`, since it contains your account's session cookies, unencrypted. Treat it like a password: whoever has it can act as your logged-in YouTube session. The cookies also expire periodically, so you'll need to re-export and re-copy them if the error comes back.
+
+**Security tip:** use a separate/throwaway Google account for this instead of your main one. If the cookies file ever leaks, the blast radius is an account you don't care about, not your real one. If you ever suspect it did leak, go to that account's Google Account → Security → "Manage all devices" and sign out everywhere — that immediately invalidates the cookie.
 
 ## Notes
 

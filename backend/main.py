@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 import uuid
@@ -14,6 +15,24 @@ app = FastAPI(title="YouTube Downloader")
 
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "yt-downloader"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+COOKIES_FILE = Path(__file__).parent / "cookies.txt"
+
+# Set by docker-compose to reach the bgutil-provider sidecar. Left unset in local
+# dev, where the yt-dlp plugin falls back to its own default (127.0.0.1:4416) if
+# a provider happens to be running, or simply skips PO tokens otherwise.
+POT_PROVIDER_URL = os.environ.get("BGUTIL_POT_BASE_URL")
+
+
+def _base_opts() -> dict:
+    opts = {"quiet": True}
+    if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
+        opts["cookiefile"] = str(COOKIES_FILE)
+    if POT_PROVIDER_URL:
+        opts["extractor_args"] = {
+            "youtubepot-bgutilhttp": {"base_url": POT_PROVIDER_URL}
+        }
+    return opts
 
 FORMAT_PRESETS = {
     "best": "bestvideo+bestaudio/best",
@@ -39,7 +58,7 @@ def _cleanup_task(path: Path) -> BackgroundTask:
 
 @app.post("/api/info")
 def get_info(payload: InfoRequest):
-    ydl_opts = {"quiet": True, "skip_download": True}
+    ydl_opts = {**_base_opts(), "skip_download": True}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(payload.url, download=False)
@@ -64,7 +83,7 @@ def download(payload: DownloadRequest):
 
     is_audio = payload.quality == "audio"
     ydl_opts = {
-        "quiet": True,
+        **_base_opts(),
         "format": FORMAT_PRESETS[payload.quality],
         "outtmpl": str(job_dir / "%(title)s.%(ext)s"),
     }
