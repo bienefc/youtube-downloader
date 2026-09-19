@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>YouTube Downloader</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>YouTube Downloader</h1>
+      <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+        </svg>
+        <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
+    </header>
+
+    <main>
+      <div class="input-row">
+        <input id="url-input" type="text" placeholder="Paste a YouTube video URL..." />
+        <button id="fetch-btn" class="primary-btn">Fetch</button>
+      </div>
+
+      <p id="error-msg" class="error" hidden></p>
+
+      <section id="video-card" class="video-card" hidden>
+        <img id="video-thumb" alt="Video thumbnail" />
+        <div class="video-meta">
+          <h2 id="video-title"></h2>
+          <p id="video-uploader" class="muted"></p>
+          <p id="video-duration" class="muted"></p>
+
+          <div class="download-row">
+            <select id="quality-select">
+              <option value="best">Best quality</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+              <option value="audio">Audio only (MP3)</option>
+            </select>
+            <button id="download-btn" class="primary-btn">Download</button>
+          </div>
+
+          <p id="status-msg" class="muted" hidden></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
